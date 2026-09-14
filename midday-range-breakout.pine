@@ -1,0 +1,121 @@
+//@version=6
+// Midday Range Breakout
+// Apply on a 5-minute NSE chart. This strategy is for backtesting and education.
+strategy(
+     title = "Midday Range Breakout",
+     overlay = true,
+     pyramiding = 0,
+     process_orders_on_close = false,
+     calc_on_order_fills = true,
+     initial_capital = 100000,
+     commission_type = strategy.commission.percent,
+     commission_value = 0.03
+)
+
+// Range: 9:15 AM to 12:00 PM India time.
+rangeSession   = input.session("0915-1200", "Build range from (IST)")
+exitSession    = input.session("1515-1530", "Square-off session (IST)")
+minimumRR      = input.float(1.20, "Minimum Risk : Reward", minval = 0.10, step = 0.05)
+stopMultiplier = input.float(0.50, "Stop = range height x", minval = 0.10, step = 0.10)
+
+// Keep this off during historical testing. A manually entered POC only applies
+// to the specific trading day for which it was obtained from Volume Profile.
+usePOCFilter   = input.bool(false, "Use previous-day POC filter")
+previousDayPOC = input.float(0.0, "Previous-day POC price (live/manual use)", step = 0.05)
+showLevels     = input.bool(true, "Show range, POC, and target levels")
+
+inRangeSession = not na(time(timeframe.period, rangeSession, "Asia/Kolkata"))
+inExitSession  = not na(time(timeframe.period, exitSession, "Asia/Kolkata"))
+newDay          = timeframe.change("D")
+
+var float rangeHigh = na
+var float rangeLow = na
+var bool rangeReady = false
+var bool breakoutSeen = false
+
+var float currentDayHigh = na
+var float currentDayLow = na
+var float previousDayHigh = na
+var float previousDayLow = na
+
+var float tradeTarget = na
+var float tradeRange = na
+
+// Calculate yesterday's values from already completed intraday bars.
+// This deliberately avoids request.security(..., lookahead_on).
+if newDay
+    previousDayHigh := currentDayHigh
+    previousDayLow := currentDayLow
+    currentDayHigh := high
+    currentDayLow := low
+    rangeHigh := na
+    rangeLow := na
+    rangeReady := false
+    breakoutSeen := false
+else
+    currentDayHigh := na(currentDayHigh) ? high : math.max(currentDayHigh, high)
+    currentDayLow := na(currentDayLow) ? low : math.min(currentDayLow, low)
+
+// Build the pre-noon range.
+if inRangeSession
+    rangeHigh := na(rangeHigh) ? high : math.max(rangeHigh, high)
+    rangeLow := na(rangeLow) ? low : math.min(rangeLow, low)
+
+if not inRangeSession and inRangeSession[1] and not na(rangeHigh) and not na(rangeLow)
+    rangeReady := true
+
+rangeHeight = rangeHigh - rangeLow
+riskAmount = rangeHeight * stopMultiplier
+
+// The optional POC confirmation requires yesterday's POC to lie inside the box.
+pocEntered = previousDayPOC > 0
+pocInsideRange = pocEntered and rangeLow <= previousDayPOC and rangeHigh >= previousDayPOC
+pocConditionMet = not usePOCFilter or pocInsideRange
+
+// The first 5-minute close beyond the range creates a next-bar market entry.
+longBreakout = rangeReady and not breakoutSeen and strategy.position_size == 0 and pocConditionMet and close > rangeHigh and close[1] <= rangeHigh
+shortBreakout = rangeReady and not breakoutSeen and strategy.position_size == 0 and pocConditionMet and close < rangeLow and close[1] >= rangeLow
+
+if longBreakout or shortBreakout
+    breakoutSeen := true
+
+// For longs the previous day high is the target; for shorts, previous day low.
+if longBreakout
+    longRR = riskAmount > 0 and not na(previousDayHigh) ? (previousDayHigh - close) / riskAmount : na
+    if previousDayHigh > close and longRR >= minimumRR
+        tradeTarget := previousDayHigh
+        tradeRange := rangeHeight
+        strategy.entry("Long", strategy.long, comment = "Range breakout long")
+
+if shortBreakout
+    shortRR = riskAmount > 0 and not na(previousDayLow) ? (close - previousDayLow) / riskAmount : na
+    if previousDayLow < close and shortRR >= minimumRR
+        tradeTarget := previousDayLow
+        tradeRange := rangeHeight
+        strategy.entry("Short", strategy.short, comment = "Range breakout short")
+
+// Stop is half the range height from the actual filled entry price.
+if strategy.position_size > 0 and not na(tradeRange) and not na(tradeTarget)
+    longStop = strategy.position_avg_price - tradeRange * stopMultiplier
+    strategy.exit("Long exit", from_entry = "Long", stop = longStop, limit = tradeTarget)
+
+if strategy.position_size < 0 and not na(tradeRange) and not na(tradeTarget)
+    shortStop = strategy.position_avg_price + tradeRange * stopMultiplier
+    strategy.exit("Short exit", from_entry = "Short", stop = shortStop, limit = tradeTarget)
+
+// This is intraday-only: close any remaining position before close.
+if inExitSession and strategy.position_size != 0
+    strategy.close_all(comment = "End-of-day exit")
+
+if strategy.position_size == 0 and strategy.position_size[1] != 0
+    tradeTarget := na
+    tradeRange := na
+
+plot(showLevels and rangeReady ? rangeHigh : na, "Range High", color = color.lime, linewidth = 2, style = plot.style_linebr)
+plot(showLevels and rangeReady ? rangeLow : na, "Range Low", color = color.red, linewidth = 2, style = plot.style_linebr)
+plot(showLevels and usePOCFilter and pocEntered ? previousDayPOC : na, "Previous-day POC", color = color.orange, linewidth = 2, style = plot.style_linebr)
+plot(showLevels and strategy.position_size != 0 ? tradeTarget : na, "Target", color = color.blue, linewidth = 2, style = plot.style_linebr)
+
+bgcolor(inRangeSession ? color.new(color.purple, 88) : na, title = "Range-building period")
+plotshape(longBreakout, "Long breakout", shape.triangleup, location.belowbar, color.lime, size = size.tiny)
+plotshape(shortBreakout, "Short breakout", shape.triangledown, location.abovebar, color.red, size = size.tiny)
