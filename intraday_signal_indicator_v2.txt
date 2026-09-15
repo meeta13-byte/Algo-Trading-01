@@ -1,0 +1,95 @@
+//@version=5
+indicator("Intraday Signal Filter (VWAP + EMA + RSI + Volume) v2", overlay=true)
+
+// ===== INPUTS =====
+emaFastLen    = input.int(9, "Fast EMA Length")
+emaSlowLen    = input.int(20, "Slow EMA Length")
+rsiLen        = input.int(14, "RSI Length")
+rsiOverbought = input.int(70, "RSI Overbought Level")
+rsiOversold   = input.int(30, "RSI Oversold Level")
+volAvgLen     = input.int(20, "Volume Average Length")
+volMultiplier = input.float(1.5, "Volume Spike Multiplier (x avg)")
+
+slPercent     = input.float(0.5, "Stop-Loss %", step=0.1) / 100
+targetPercent = input.float(1.0, "Target %", step=0.1) / 100
+
+// ===== VWAP =====
+vwapValue = ta.vwap(hlc3)
+
+// ===== EMA TREND =====
+emaFast = ta.ema(close, emaFastLen)
+emaSlow = ta.ema(close, emaSlowLen)
+bullishTrend = emaFast > emaSlow
+bearishTrend = emaFast < emaSlow
+
+// ===== RSI =====
+rsiValue = ta.rsi(close, rsiLen)
+
+// ===== VOLUME CONFIRMATION =====
+avgVolume = ta.sma(volume, volAvgLen)
+volumeSpike = volume > (avgVolume * volMultiplier)
+
+// ===== PREVIOUS DAY HIGH/LOW =====
+prevDayHigh = request.security(syminfo.tickerid, "D", high[1], lookahead=barmerge.lookahead_off)
+prevDayLow  = request.security(syminfo.tickerid, "D", low[1], lookahead=barmerge.lookahead_off)
+
+// ===== BUY / SELL CONDITIONS =====
+buyCondition  = close > vwapValue and bullishTrend and rsiValue > 50 and rsiValue < rsiOverbought and volumeSpike
+sellCondition = close < vwapValue and bearishTrend and rsiValue < 50 and rsiValue > rsiOversold and volumeSpike
+
+// ===== AUTO-CALCULATED SL / TARGET (fixed %) =====
+buyEntryPrice  = close
+buySL          = buyEntryPrice * (1 - slPercent)
+buyTarget      = buyEntryPrice * (1 + targetPercent)
+
+sellEntryPrice = close
+sellSL         = sellEntryPrice * (1 + slPercent)
+sellTarget     = sellEntryPrice * (1 - targetPercent)
+
+// ===== PLOTTING =====
+plot(vwapValue, title="VWAP", color=color.blue, linewidth=2)
+plot(emaFast, title="Fast EMA", color=color.orange)
+plot(emaSlow, title="Slow EMA", color=color.purple)
+plot(prevDayHigh, title="Prev Day High", color=color.gray, style=plot.style_linebr)
+plot(prevDayLow, title="Prev Day Low", color=color.gray, style=plot.style_linebr)
+
+plotshape(buyCondition, title="Buy Signal", location=location.belowbar, color=color.green, style=shape.triangleup, size=size.small, text="BUY")
+plotshape(sellCondition, title="Sell Signal", location=location.abovebar, color=color.red, style=shape.triangledown, size=size.small, text="SELL")
+
+// ===== ENTRY / SL / TARGET LABELS =====
+if buyCondition
+    label.new(bar_index, low, "BUY " + str.tostring(buyEntryPrice, "#.##") +
+     "\nSL: " + str.tostring(buySL, "#.##") +
+     "\nTarget: " + str.tostring(buyTarget, "#.##"),
+     style=label.style_label_up, color=color.new(color.green, 20), textcolor=color.white, size=size.small)
+
+if sellCondition
+    label.new(bar_index, high, "SELL " + str.tostring(sellEntryPrice, "#.##") +
+     "\nSL: " + str.tostring(sellSL, "#.##") +
+     "\nTarget: " + str.tostring(sellTarget, "#.##"),
+     style=label.style_label_down, color=color.new(color.red, 20), textcolor=color.white, size=size.small)
+
+// ===== BACKGROUND HIGHLIGHT FOR VOLUME SPIKE =====
+bgcolor(volumeSpike ? color.new(color.yellow, 85) : na, title="Volume Spike Highlight")
+
+// ===== ALERTS =====
+alertcondition(buyCondition, title="Buy Alert", message="BUY signal — entry at close, SL {{plot('Fast EMA')}}")
+alertcondition(sellCondition, title="Sell Alert", message="SELL signal triggered")
+
+// ===== INFO TABLE =====
+var table infoTable = table.new(position.top_right, 2, 7, border_width=1)
+if barstate.islast
+    table.cell(infoTable, 0, 0, "Metric", bgcolor=color.gray, text_color=color.white)
+    table.cell(infoTable, 1, 0, "Value", bgcolor=color.gray, text_color=color.white)
+    table.cell(infoTable, 0, 1, "VWAP")
+    table.cell(infoTable, 1, 1, str.tostring(vwapValue, "#.##"))
+    table.cell(infoTable, 0, 2, "RSI")
+    table.cell(infoTable, 1, 2, str.tostring(rsiValue, "#.##"))
+    table.cell(infoTable, 0, 3, "Trend")
+    table.cell(infoTable, 1, 3, bullishTrend ? "Bullish" : bearishTrend ? "Bearish" : "Neutral")
+    table.cell(infoTable, 0, 4, "Vol Spike")
+    table.cell(infoTable, 1, 4, volumeSpike ? "Yes" : "No")
+    table.cell(infoTable, 0, 5, "Buy SL/Target")
+    table.cell(infoTable, 1, 5, str.tostring(buySL, "#.##") + " / " + str.tostring(buyTarget, "#.##"))
+    table.cell(infoTable, 0, 6, "Sell SL/Target")
+    table.cell(infoTable, 1, 6, str.tostring(sellSL, "#.##") + " / " + str.tostring(sellTarget, "#.##"))
